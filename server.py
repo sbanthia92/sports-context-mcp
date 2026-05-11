@@ -23,11 +23,13 @@ Register in Claude Desktop (claude_desktop_config.json):
 
 import asyncio
 import logging
+import sys
 
 import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from config import cfg
 from tools.query_historical_stats import (
     SCHEMA_DESCRIPTION,
     query_historical_stats,
@@ -39,6 +41,92 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 log = logging.getLogger(__name__)
+
+
+def check_config() -> None:
+    """
+    Validate configuration and test connectivity for each configured component.
+
+    Prints a human-readable summary of what is and isn't set up correctly.
+    Exits with code 1 if any required component fails its connectivity check.
+    """
+    import asyncio
+
+    ok = True
+    lines = ["\n=== sports-context-mcp configuration check ===\n"]
+
+    # --- Pinecone ---
+    if not cfg.pinecone_api_key:
+        lines.append("❌ PINECONE_API_KEY  not set (required for query_press_conferences)")
+        ok = False
+    else:
+        try:
+            from pinecone import Pinecone as _PC
+
+            pc = _PC(api_key=cfg.pinecone_api_key)
+            pc.Index(cfg.pinecone_index_name).describe_index_stats()
+            lines.append(f"✅ Pinecone          connected (index: {cfg.pinecone_index_name!r})")
+        except Exception as exc:
+            lines.append(f"❌ Pinecone          connection failed: {exc}")
+            ok = False
+
+    # --- PostgreSQL (read-only) ---
+    if not cfg.database_url:
+        lines.append("⚠️  DATABASE_URL      not set (query_historical_stats will be unavailable)")
+    else:
+        try:
+            import asyncpg
+
+            async def _ping() -> None:
+                conn = await asyncpg.connect(cfg.database_url)
+                await conn.fetchval("SELECT 1")
+                await conn.close()
+
+            asyncio.run(_ping())
+            lines.append(f"✅ PostgreSQL (RO)   connected ({cfg.database_url.split('@')[-1]})")
+        except Exception as exc:
+            lines.append(f"❌ PostgreSQL (RO)   connection failed: {exc}")
+            ok = False
+
+    # --- PostgreSQL (ETL / read-write) ---
+    if not cfg.database_etl_url:
+        lines.append("⚠️  DATABASE_ETL_URL  not set (ingest_match_data will be unavailable)")
+    else:
+        try:
+            import psycopg2
+
+            conn = psycopg2.connect(cfg.database_etl_url, connect_timeout=5)
+            conn.close()
+            url_display = cfg.database_etl_url.split("@")[-1]
+            lines.append(f"✅ PostgreSQL (ETL)  connected ({url_display})")
+        except Exception as exc:
+            lines.append(f"❌ PostgreSQL (ETL)  connection failed: {exc}")
+            ok = False
+
+    # --- Guardian API (optional) ---
+    if cfg.guardian_api_key == "test":
+        lines.append(
+            "⚠️  GUARDIAN_API_KEY  using 'test' key (bodyText unavailable — "
+            "register at open-platform.theguardian.com for full article text)"
+        )
+    else:
+        lines.append("✅ Guardian API      registered key configured")
+
+    # --- API-Sports (optional) ---
+    if not cfg.api_sports_key:
+        lines.append("⚠️  API_SPORTS_KEY    not set (ingest_match_data will run FPL-only mode)")
+    else:
+        lines.append("✅ API-Sports        key configured")
+
+    # --- Dry-run flag ---
+    if cfg.dry_run:
+        lines.append("\n🔁 DRY_RUN=true — no writes will be made")
+
+    summary = "✅ All required components OK" if ok else "❌ One or more components failed"
+    lines.append(f"\n{summary}\n")
+    print("\n".join(lines))
+    sys.exit(0 if ok else 1)
+
 
 server = Server("sports-context-mcp")
 
@@ -157,6 +245,11 @@ async def call_tool(
 
 async def _serve() -> None:
     """Wire the MCP server to stdio and run until the client disconnects."""
+    if cfg.dry_run:
+        log.warning(
+            "DRY RUN MODE — tools will return what they would do without side effects. "
+            "Set DRY_RUN=false to disable."
+        )
     async with stdio_server() as (read_stream, write_stream):
         log.info("sports-context-mcp server started (stdio transport)")
         await server.run(
@@ -167,7 +260,14 @@ async def _serve() -> None:
 
 
 def main() -> None:
-    """Entry point — run the MCP server synchronously via asyncio."""
+    """Entry point — run the MCP server synchronously via asyncio.
+
+    Pass --check to validate configuration and test connectivity without
+    starting the MCP server.
+    """
+    if "--check" in sys.argv:
+        check_config()
+        return
     asyncio.run(_serve())
 
 
