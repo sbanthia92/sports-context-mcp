@@ -49,7 +49,6 @@ jobs:
 
       - name: Install package and dependencies
         run: pip install -e ".[dev]"
-        working-directory: sports-context-mcp
 
       - name: Run match data ingestion
         env:
@@ -60,4 +59,3 @@ jobs:
           # API-Sports key for supplementary match data (standings, etc.).
           API_SPORTS_KEY: ${{ secrets.API_SPORTS_KEY }}
         run: python -m jobs.ingest_match_data
-        working-directory: sports-context-mcp
