@@ -1,0 +1,44 @@
+[project]
+name = "sports-context-mcp"
+version = "0.1.0"
+description = "Standalone MCP server exposing sports stats and press-conference RAG as MCP tools, with threaded ingestion jobs for PostgreSQL and Pinecone."
+requires-python = ">=3.11"
+dependencies = [
+    # MCP server framework (stdio transport)
+    "mcp>=1.0.0",
+    # Pinecone vector store — used by the MCP tool and the press ingestion job
+    "pinecone>=5.0.0",
+    # Async PostgreSQL client — used by the MCP query tool (server is async)
+    "asyncpg>=0.29.0",
+    # Sync PostgreSQL client — used by the threaded ingest_match_data job
+    "psycopg2-binary>=2.9.9",
+    # Sync HTTP client — used by both threaded ingestion jobs
+    "requests>=2.32.0",
+    # .env file support for local development
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+# Run the MCP server: cd sports-context-mcp && python server.py
+# (stdio transport — register in claude_desktop_config.json or via mcp install)
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tools*", "jobs*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
