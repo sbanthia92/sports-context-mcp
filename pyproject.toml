@@ -33,7 +33,7 @@ where = ["."]
 include = ["tools*", "jobs*"]
 
 [tool.setuptools]
-py-modules = ["config"]
+py-modules = ["config", "server"]
 
 [tool.ruff]
 line-length = 100
