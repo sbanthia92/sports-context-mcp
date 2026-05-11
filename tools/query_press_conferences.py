@@ -87,6 +87,17 @@ async def query_press_conferences(
         log.error("PINECONE_API_KEY is not set — cannot query press conferences.")
         return ""
 
+    if cfg.dry_run:
+        log.info("[dry run] query_press_conferences: would search Pinecone, query=%r", query)
+        return (
+            "[DRY RUN] No Pinecone call was made. "
+            f"Would have searched index '{cfg.pinecone_index_name}' "
+            f"namespace='{_NAMESPACE}' with:\n"
+            f"  query={query!r}\n"
+            f"  top_k={top_k}\n"
+            f"  recency_weight={recency_weight}"
+        )
+
     pc = _build_client()
     index = pc.Index(cfg.pinecone_index_name)
 

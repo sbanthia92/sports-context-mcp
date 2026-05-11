@@ -120,3 +120,32 @@ async def test_top_k_is_passed_to_pinecone(mock_pinecone):
 
     call_kwargs = index.query.call_args.kwargs
     assert call_kwargs["top_k"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Dry-run tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_returns_summary_without_pinecone_call(monkeypatch):
+    """In dry-run mode a description is returned and Pinecone is never called."""
+    monkeypatch.setenv("PINECONE_API_KEY", "pk_test")
+    monkeypatch.setenv("DRY_RUN", "true")
+
+    from importlib import reload
+
+    import config as cfg_module
+
+    reload(cfg_module)
+
+    with (
+        patch("tools.query_press_conferences.cfg", cfg_module.cfg),
+        patch("tools.query_press_conferences.Pinecone") as MockPC,
+    ):
+        result = await query_press_conferences("injury news", top_k=3, recency_weight=0.5)
+
+    assert "[DRY RUN]" in result
+    assert "injury news" in result
+    assert "top_k=3" in result
+    MockPC.assert_not_called()

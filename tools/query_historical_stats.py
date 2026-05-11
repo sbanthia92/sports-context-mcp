@@ -149,6 +149,14 @@ async def query_historical_stats(sql: str) -> str:
     if "LIMIT" not in normalized.upper():
         normalized = f"{normalized} LIMIT {_MAX_ROWS}"
 
+    if cfg.dry_run:
+        log.info("[dry run] query_historical_stats: would execute SQL:\n%s", normalized)
+        host = cfg.database_url.split("@")[-1] if cfg.database_url else "DATABASE_URL"
+        return (
+            f"[DRY RUN] No database connection was made. "
+            f"Would have executed against {host}:\n\n{normalized}"
+        )
+
     conn: asyncpg.Connection = await asyncpg.connect(
         cfg.database_url,
         statement_cache_size=0,  # avoid prepared-statement conflicts on read-only connections

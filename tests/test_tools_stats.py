@@ -10,7 +10,6 @@ import pytest
 
 from tools.query_historical_stats import _check_for_mutations, _format_rows, query_historical_stats
 
-
 # ---------------------------------------------------------------------------
 # Unit tests — mutation guard (synchronous, no mocking needed)
 # ---------------------------------------------------------------------------
@@ -164,8 +163,53 @@ async def test_returns_error_string_on_db_exception(mock_asyncpg):
     _, conn = mock_asyncpg
     conn.fetch.side_effect = conn.fetch.side_effect  # reset
     import asyncpg as real_asyncpg
+
     conn.fetch.side_effect = real_asyncpg.PostgresError("relation does not exist")
 
     result = await query_historical_stats("SELECT * FROM nonexistent_table")
 
     assert "Database error" in result
+
+
+# ---------------------------------------------------------------------------
+# Dry-run tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_returns_sql_without_db_call(mock_asyncpg, monkeypatch):
+    """In dry-run mode the validated SQL is returned and the DB is never contacted."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ro:x@localhost/db")
+    monkeypatch.setenv("DRY_RUN", "true")
+
+    from importlib import reload
+
+    import config as cfg_module
+
+    reload(cfg_module)
+
+    with patch("tools.query_historical_stats.cfg", cfg_module.cfg):
+        result = await query_historical_stats("SELECT * FROM players")
+
+    assert "[DRY RUN]" in result
+    assert "SELECT" in result
+    _, conn = mock_asyncpg
+    conn.fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_injects_limit(mock_asyncpg, monkeypatch):
+    """Dry-run still injects LIMIT before returning the SQL."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://ro:x@localhost/db")
+    monkeypatch.setenv("DRY_RUN", "true")
+
+    from importlib import reload
+
+    import config as cfg_module
+
+    reload(cfg_module)
+
+    with patch("tools.query_historical_stats.cfg", cfg_module.cfg):
+        result = await query_historical_stats("SELECT id FROM players")
+
+    assert "LIMIT" in result.upper()

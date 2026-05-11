@@ -5,8 +5,6 @@ All external calls (HTTP, Pinecone, PostgreSQL) are mocked here so tests
 never hit real APIs or databases.
 """
 
-import os
-
 import pytest
 
 
