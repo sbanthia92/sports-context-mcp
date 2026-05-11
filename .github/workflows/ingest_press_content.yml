@@ -1,0 +1,45 @@
+name: Ingest Press Content
+
+# Runs nightly to keep the Pinecone 'press' namespace fresh with the latest
+# Premier League news from BBC Sport and The Guardian.
+#
+# Also triggered on push to the ingestion branch so changes to the job can be
+# tested without waiting for the nightly window.
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # nightly at midnight UTC
+  push:
+    branches:
+      - ingestion # push to this branch to trigger a live test run
+  workflow_dispatch: # allow manual trigger from the GitHub Actions UI
+
+jobs:
+  ingest-press:
+    name: Ingest press content to Pinecone
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and dependencies
+        # Install sports-context-mcp as an editable package so all relative
+        # imports resolve correctly when running jobs as modules.
+        run: pip install -e ".[dev]"
+        working-directory: sports-context-mcp
+
+      - name: Run press content ingestion
+        env:
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX_NAME: ${{ secrets.PINECONE_INDEX_NAME }}
+          # GUARDIAN_API_KEY is optional — defaults to the free 'test' key.
+          # Register at https://open-platform.theguardian.com/access/ for a
+          # production key that unlocks full article body text.
+          GUARDIAN_API_KEY: ${{ secrets.GUARDIAN_API_KEY }}
+        run: python -m jobs.ingest_press_content
+        working-directory: sports-context-mcp

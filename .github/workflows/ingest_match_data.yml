@@ -1,0 +1,63 @@
+name: Ingest Match Data
+
+# Fetches the latest PL match and player data from the FPL API and API-Sports
+# and writes any new entries to PostgreSQL (delta update — only new fixtures).
+#
+# --- HOW TO ADJUST THE SCHEDULE ---
+#
+# FPL gameweek cadence (PL season, Aug–May):
+#   Matches are typically played Sat/Sun, with midweek rounds (Tue/Wed) during
+#   congested periods. A schedule of twice daily (06:00 + 22:00 UTC) keeps the
+#   DB fresh without hammering the FPL API.
+#   Recommended: "0 6,22 * * *"
+#
+# World Cup match cadence (tournament mode, Jun–Jul):
+#   Matches run daily across multiple time zones. Run hourly during group stages,
+#   every 6 hours during knockout rounds.
+#   Recommended group stage:  "0 * * * *"   (every hour)
+#   Recommended knockout:     "0 */6 * * *" (every 6 hours)
+#
+# Off-season / pre-season:
+#   Once daily is sufficient (no live matches, just squad/price changes).
+#   Recommended: "0 8 * * *"
+#
+# Change the cron expression below and commit — the schedule takes effect on the
+# next push to main (GitHub Actions re-reads the schedule on workflow file changes).
+
+on:
+  schedule:
+    # Default: twice daily at 06:00 and 22:00 UTC — suitable for FPL gameweek cadence.
+    # See the comments above for World Cup and off-season alternatives.
+    - cron: "0 6,22 * * *"
+  push:
+    branches:
+      - ingestion # push to this branch to trigger a live test run
+  workflow_dispatch: # allow manual trigger from the GitHub Actions UI
+
+jobs:
+  ingest-match-data:
+    name: Ingest match data to PostgreSQL
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and dependencies
+        run: pip install -e ".[dev]"
+        working-directory: sports-context-mcp
+
+      - name: Run match data ingestion
+        env:
+          # Read-only connection used to find the delta boundary (last kickoff).
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Read/write connection used to write new fixtures and player stats.
+          DATABASE_ETL_URL: ${{ secrets.DATABASE_ETL_URL }}
+          # API-Sports key for supplementary match data (standings, etc.).
+          API_SPORTS_KEY: ${{ secrets.API_SPORTS_KEY }}
+        run: python -m jobs.ingest_match_data
+        working-directory: sports-context-mcp
