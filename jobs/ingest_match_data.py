@@ -797,7 +797,7 @@ def delta_write(fpl_result: dict | None, sports_result: dict | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run() -> None:
+def run(dry_run: bool = False) -> None:
     """
     Run the full match data ingestion pipeline.
 
@@ -811,8 +811,14 @@ def run() -> None:
     Thread 3 is guaranteed not to start until Threads 1 and 2 are both done.
     Partial fetch failure (one thread raises) does not abort the job — delta_write
     handles None results gracefully.
+
+    Args:
+        dry_run: When True, fetch threads run normally but the delta write (Thread 3)
+                 is skipped. Logs the fixture and player counts that would have been
+                 written so you can verify API reachability and data shape before
+                 committing to a live run. Can also be enabled via DRY_RUN=true.
     """
-    log.info("=== ingest_match_data: starting ===")
+    log.info("=== ingest_match_data: starting%s ===", " [DRY RUN]" if dry_run else "")
 
     with ThreadPoolExecutor(max_workers=3, thread_name_prefix="ingest-match") as executor:
         # Submit fetch threads.
@@ -841,6 +847,18 @@ def run() -> None:
         else:
             sports_result = f2.result()
 
+        if dry_run:
+            players = len((fpl_result or {}).get("bootstrap", {}).get("elements", []))
+            fixtures = len((fpl_result or {}).get("fixtures", []))
+            log.info(
+                "[dry run] would delta-write %d players and %d fixtures. "
+                "No PostgreSQL writes made.",
+                players,
+                fixtures,
+            )
+            log.info("=== ingest_match_data: complete [DRY RUN] ===")
+            return
+
         # Submit Thread 3 now that Threads 1 and 2 are guaranteed to be done.
         f3: Future = executor.submit(delta_write, fpl_result, sports_result)
         f3.result()  # Wait for the write thread; re-raises on unhandled exception.
@@ -849,4 +867,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run(dry_run=cfg.dry_run)

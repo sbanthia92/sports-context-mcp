@@ -5,11 +5,8 @@ All HTTP and PostgreSQL calls are mocked. Tests cover thread coordination,
 delta filtering, partial failure handling, and the full run() orchestration.
 """
 
-from concurrent.futures import Future
-from datetime import UTC, datetime, timezone
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 from jobs.ingest_match_data import (
     _current_season_start_year,
@@ -20,7 +17,6 @@ from jobs.ingest_match_data import (
     fetch_fpl_data,
     run,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure helper tests
@@ -207,13 +203,13 @@ def test_delta_write_proceeds_without_sports_result():
     etl_conn = MagicMock()
     cur = MagicMock()
     cur.fetchone.return_value = (1,)  # season_id
-    cur.fetchall.return_value = []    # no players for stat fetch
+    cur.fetchall.return_value = []  # no players for stat fetch
     etl_conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
     etl_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-    ro_conn.cursor.return_value.__enter__ = MagicMock(return_value=MagicMock(
-        fetchone=MagicMock(return_value=(None,))
-    ))
+    ro_conn.cursor.return_value.__enter__ = MagicMock(
+        return_value=MagicMock(fetchone=MagicMock(return_value=(None,)))
+    )
     ro_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     with patch("jobs.ingest_match_data._get_db_conn", side_effect=[ro_conn, etl_conn]):
@@ -235,9 +231,9 @@ def test_delta_write_rolls_back_on_error():
     etl_conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
     etl_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-    ro_conn.cursor.return_value.__enter__ = MagicMock(return_value=MagicMock(
-        fetchone=MagicMock(return_value=(None,))
-    ))
+    ro_conn.cursor.return_value.__enter__ = MagicMock(
+        return_value=MagicMock(fetchone=MagicMock(return_value=(None,)))
+    )
     ro_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     with patch("jobs.ingest_match_data._get_db_conn", side_effect=[ro_conn, etl_conn]):
@@ -288,12 +284,47 @@ def test_run_passes_none_to_write_on_fetch_failure():
         received["fpl"] = fpl_result
         received["sports"] = sports_result
 
+    _sports_rv = {"standings": [], "season": 2025}
     with (
         patch("jobs.ingest_match_data.fetch_fpl_data", side_effect=RuntimeError("FPL down")),
-        patch("jobs.ingest_match_data.fetch_api_sports_data", return_value={"standings": [], "season": 2025}),
+        patch("jobs.ingest_match_data.fetch_api_sports_data", return_value=_sports_rv),
         patch("jobs.ingest_match_data.delta_write", side_effect=fake_delta_write),
     ):
         run()
 
     assert received["fpl"] is None
     assert received["sports"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Dry-run tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_dry_run_skips_delta_write():
+    """run(dry_run=True) fetches from both sources but never calls delta_write."""
+    _sports_rv = {"standings": [], "season": 2025}
+    with (
+        patch("jobs.ingest_match_data.fetch_fpl_data", return_value=_make_fpl_result()),
+        patch("jobs.ingest_match_data.fetch_api_sports_data", return_value=_sports_rv),
+        patch("jobs.ingest_match_data.delta_write") as mock_write,
+    ):
+        run(dry_run=True)
+
+    mock_write.assert_not_called()
+
+
+def test_run_dry_run_still_fetches():
+    """run(dry_run=True) still calls both fetch functions to verify API reachability."""
+    _sports_rv = {"standings": [], "season": 2025}
+    with (
+        patch("jobs.ingest_match_data.fetch_fpl_data", return_value=_make_fpl_result()) as mock_fpl,
+        patch(
+            "jobs.ingest_match_data.fetch_api_sports_data", return_value=_sports_rv
+        ) as mock_sports,  # noqa: E501
+        patch("jobs.ingest_match_data.delta_write"),
+    ):
+        run(dry_run=True)
+
+    mock_fpl.assert_called_once()
+    mock_sports.assert_called_once()

@@ -5,7 +5,6 @@ All HTTP and Pinecone calls are mocked. Tests cover fetcher logic, document
 building, deduplication, and the threaded orchestration path.
 """
 
-import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,7 +13,6 @@ import requests
 from jobs.ingest_press_content import (
     BBCSportFetcher,
     GuardianAPIFetcher,
-    _BaseFetcher,
     _days_ago,
     _doc_id,
     _existing_ids,
@@ -22,7 +20,6 @@ from jobs.ingest_press_content import (
     _upsert,
     run,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure helper tests (no mocking needed)
@@ -84,10 +81,10 @@ def _make_rss_response(items: list[dict]) -> str:
     for item in items:
         items_xml += f"""
         <item>
-            <title>{item.get('title', 'Title')}</title>
-            <description>{item.get('description', 'Body text')}</description>
-            <link>{item.get('link', 'http://example.com/1')}</link>
-            <pubDate>{item.get('pubDate', now)}</pubDate>
+            <title>{item.get("title", "Title")}</title>
+            <description>{item.get("description", "Body text")}</description>
+            <link>{item.get("link", "http://example.com/1")}</link>
+            <pubDate>{item.get("pubDate", now)}</pubDate>
         </item>"""
     return f"""<?xml version="1.0"?>
     <rss><channel>{items_xml}</channel></rss>"""
@@ -99,10 +96,22 @@ def mock_bbc_response():
     from datetime import UTC, datetime
 
     now = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S +0000")
-    rss = _make_rss_response([
-        {"title": "Arsenal win title", "description": "Arsenal clinch it", "link": "http://bbc.com/1", "pubDate": now},
-        {"title": "Salah hat-trick", "description": "Liverpool star scores three", "link": "http://bbc.com/2", "pubDate": now},
-    ])
+    rss = _make_rss_response(
+        [
+            {
+                "title": "Arsenal win title",
+                "description": "Arsenal clinch it",
+                "link": "http://bbc.com/1",
+                "pubDate": now,
+            },  # noqa: E501
+            {
+                "title": "Salah hat-trick",
+                "description": "Liverpool star scores three",
+                "link": "http://bbc.com/2",
+                "pubDate": now,
+            },  # noqa: E501
+        ]
+    )
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = rss
@@ -129,9 +138,16 @@ def test_bbc_fetcher_returns_docs(mock_bbc_response):
 def test_bbc_fetcher_skips_old_articles():
     """BBCSportFetcher skips articles older than 7 days."""
     old_date = "Mon, 01 Jan 2024 00:00:00 +0000"
-    rss = _make_rss_response([
-        {"title": "Old article", "description": "This is old", "link": "http://bbc.com/old", "pubDate": old_date},
-    ])
+    rss = _make_rss_response(
+        [
+            {
+                "title": "Old article",
+                "description": "This is old",
+                "link": "http://bbc.com/old",
+                "pubDate": old_date,
+            },  # noqa: E501
+        ]
+    )
     mock_resp = MagicMock()
     mock_resp.text = rss
     mock_resp.raise_for_status = MagicMock()
@@ -158,9 +174,16 @@ def test_bbc_fetcher_skips_items_without_description(mock_bbc_response):
     from datetime import UTC, datetime
 
     now = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S +0000")
-    rss = _make_rss_response([
-        {"title": "No body article", "description": "", "link": "http://bbc.com/3", "pubDate": now},
-    ])
+    rss = _make_rss_response(
+        [
+            {
+                "title": "No body article",
+                "description": "",
+                "link": "http://bbc.com/3",
+                "pubDate": now,
+            },
+        ]
+    )
     mock_resp = MagicMock()
     mock_resp.text = rss
     mock_resp.raise_for_status = MagicMock()
@@ -180,25 +203,33 @@ def _make_guardian_response(articles: list[dict]) -> dict:
     """Build a mock Guardian API JSON response."""
     results = []
     for a in articles:
-        results.append({
-            "webTitle": a.get("title", "Default Title"),
-            "webPublicationDate": a.get("date", "2026-05-10T10:00:00Z"),
-            "webUrl": a.get("url", "https://theguardian.com/1"),
-            "fields": {
-                "headline": a.get("title", "Default Title"),
-                "trailText": a.get("body", "Article summary text"),
-                "bodyText": a.get("body", ""),
-            },
-        })
+        results.append(
+            {
+                "webTitle": a.get("title", "Default Title"),
+                "webPublicationDate": a.get("date", "2026-05-10T10:00:00Z"),
+                "webUrl": a.get("url", "https://theguardian.com/1"),
+                "fields": {
+                    "headline": a.get("title", "Default Title"),
+                    "trailText": a.get("body", "Article summary text"),
+                    "bodyText": a.get("body", ""),
+                },
+            }
+        )
     return {"response": {"status": "ok", "results": results}}
 
 
 def test_guardian_fetcher_returns_docs():
     """GuardianAPIFetcher returns doc tuples from the API response."""
     mock_resp = MagicMock()
-    mock_resp.json.return_value = _make_guardian_response([
-        {"title": "PL title race", "body": "City lead by two points", "url": "https://guardian.com/1"},
-    ])
+    mock_resp.json.return_value = _make_guardian_response(
+        [
+            {
+                "title": "PL title race",
+                "body": "City lead by two points",
+                "url": "https://guardian.com/1",
+            },
+        ]
+    )
     mock_resp.raise_for_status = MagicMock()
 
     with patch("jobs.ingest_press_content.requests.get", return_value=mock_resp):
@@ -213,9 +244,11 @@ def test_guardian_fetcher_returns_docs():
 def test_guardian_fetcher_uses_trail_text_when_body_missing():
     """Falls back to trailText when bodyText is not populated (test API key)."""
     mock_resp = MagicMock()
-    payload = _make_guardian_response([
-        {"title": "Test article", "url": "https://guardian.com/2"},
-    ])
+    payload = _make_guardian_response(
+        [
+            {"title": "Test article", "url": "https://guardian.com/2"},
+        ]
+    )
     # Simulate test key — bodyText is empty
     payload["response"]["results"][0]["fields"]["bodyText"] = ""
     payload["response"]["results"][0]["fields"]["trailText"] = "Trail text summary"
@@ -324,15 +357,12 @@ def test_upsert_always_upsert_skips_id_check():
 
 def test_run_collects_from_both_fetchers():
     """run() submits both fetchers to the thread pool and upserts combined results."""
-    from datetime import UTC, datetime
-
-    now = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S +0000")
-
-    bbc_doc = ("bbc_id", "BBC text", {"text": "BBC text", "pub_timestamp": 0.0, "type": "press_article"})
-    guardian_doc = ("g_id", "Guardian text", {"text": "Guardian text", "pub_timestamp": 0.0, "type": "press_article"})
+    _meta = {"pub_timestamp": 0.0, "type": "press_article"}
+    bbc_doc = ("bbc_id", "BBC text", {"text": "BBC text", **_meta})
+    guardian_doc = ("g_id", "Guardian text", {"text": "Guardian text", **_meta})
 
     with (
-        patch("jobs.ingest_press_content.Pinecone") as MockPC,
+        patch("jobs.ingest_press_content.Pinecone"),
         patch.object(BBCSportFetcher, "fetch", return_value=[bbc_doc]),
         patch.object(GuardianAPIFetcher, "fetch", return_value=[guardian_doc]),
         patch("jobs.ingest_press_content._fetch_player_news_docs", return_value=[]),
@@ -352,7 +382,8 @@ def test_run_collects_from_both_fetchers():
 
 def test_run_continues_if_one_fetcher_fails():
     """run() logs the error from a failing fetcher but still upserts the other's docs."""
-    bbc_doc = ("bbc_id", "BBC text", {"text": "BBC text", "pub_timestamp": 0.0, "type": "press_article"})
+    _meta = {"pub_timestamp": 0.0, "type": "press_article"}
+    bbc_doc = ("bbc_id", "BBC text", {"text": "BBC text", **_meta})
 
     with (
         patch("jobs.ingest_press_content.Pinecone"),
@@ -368,3 +399,47 @@ def test_run_continues_if_one_fetcher_fails():
     # BBC doc should still be upserted
     upserted_docs = mock_upsert.call_args_list[0][0][2]
     assert upserted_docs[0][0] == "bbc_id"
+
+
+# ---------------------------------------------------------------------------
+# Dry-run tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_dry_run_skips_upsert():
+    """run(dry_run=True) fetches content but never calls _upsert or _cleanup."""
+    bbc_doc = (
+        "bbc_id",
+        "BBC text",
+        {"text": "BBC text", "pub_timestamp": 0.0, "type": "press_article"},
+    )  # noqa: E501
+
+    with (
+        patch("jobs.ingest_press_content.Pinecone"),
+        patch.object(BBCSportFetcher, "fetch", return_value=[bbc_doc]),
+        patch.object(GuardianAPIFetcher, "fetch", return_value=[]),
+        patch("jobs.ingest_press_content._fetch_player_news_docs", return_value=[]),
+        patch("jobs.ingest_press_content._upsert") as mock_upsert,
+        patch("jobs.ingest_press_content._cleanup_stale_press") as mock_cleanup,
+    ):
+        run(dry_run=True)
+
+    mock_upsert.assert_not_called()
+    mock_cleanup.assert_not_called()
+
+
+def test_run_dry_run_still_fetches():
+    """run(dry_run=True) still calls each fetcher to verify connectivity."""
+    with (
+        patch("jobs.ingest_press_content.Pinecone"),
+        patch.object(BBCSportFetcher, "fetch", return_value=[]) as mock_bbc,
+        patch.object(GuardianAPIFetcher, "fetch", return_value=[]) as mock_guardian,
+        patch("jobs.ingest_press_content._fetch_player_news_docs", return_value=[]) as mock_fpl,
+        patch("jobs.ingest_press_content._upsert"),
+        patch("jobs.ingest_press_content._cleanup_stale_press"),
+    ):
+        run(dry_run=True)
+
+    mock_bbc.assert_called_once()
+    mock_guardian.assert_called_once()
+    mock_fpl.assert_called_once()

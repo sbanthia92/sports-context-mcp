@@ -615,7 +615,7 @@ def _upsert(
 # ---------------------------------------------------------------------------
 
 
-def run() -> None:
+def run(dry_run: bool = False) -> None:
     """
     Run the full press content ingestion pipeline.
 
@@ -627,10 +627,19 @@ def run() -> None:
       3. Embed and upsert all collected press articles to Pinecone.
       4. Embed and upsert all player news documents to Pinecone.
       5. Delete press articles older than _MAX_PRESS_AGE_DAYS.
+
+    Args:
+        dry_run: When True, fetches are performed normally but all Pinecone writes
+                 and deletes are skipped. Logs what would have been written so you can
+                 verify connectivity and document counts before committing to a live run.
+                 Can also be enabled via the DRY_RUN=true environment variable.
     """
     if not cfg.pinecone_api_key:
         log.error("PINECONE_API_KEY is not set — aborting press content ingestion.")
         return
+
+    if dry_run:
+        log.info("[dry run] press ingestion — fetches will run; Pinecone writes are skipped.")
 
     pc = Pinecone(api_key=cfg.pinecone_api_key)
     index = pc.Index(cfg.pinecone_index_name)
@@ -660,6 +669,16 @@ def run() -> None:
     # Step 2: FPL player news (sequential — one request, no parallelism needed).
     player_news_docs = _fetch_player_news_docs()
 
+    if dry_run:
+        log.info(
+            "[dry run] would upsert %d press articles and %d player news docs to namespace '%s'. "
+            "No Pinecone writes made.",
+            len(press_docs),
+            len(player_news_docs),
+            _NAMESPACE,
+        )
+        return
+
     # Step 3: Upsert press articles (skip already-ingested documents).
     total = 0
     if press_docs:
@@ -684,4 +703,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run(dry_run=cfg.dry_run)
