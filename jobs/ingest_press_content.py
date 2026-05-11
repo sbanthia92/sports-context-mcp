@@ -68,6 +68,10 @@ _MAX_PRESS_AGE_DAYS = 14
 # Documents newer than this are eligible for ingestion.
 _MAX_ARTICLE_AGE_DAYS = 7
 
+# Pinecone metadata limit is 40 960 bytes per vector. Cap stored text to keep
+# total metadata well under that limit (other fields add ~200 bytes).
+_MAX_METADATA_TEXT_CHARS = 35_000
+
 # Guardian API endpoint — requires a free API key (GUARDIAN_API_KEY env var).
 _GUARDIAN_API_BASE = "https://content.guardianapis.com"
 
@@ -596,7 +600,14 @@ def _upsert(
         )
 
         vectors = [
-            {"id": doc_id, "values": emb.values, "metadata": meta}
+            {
+                "id": doc_id,
+                "values": emb.values,
+                "metadata": {
+                    **meta,
+                    "text": meta.get("text", "")[:_MAX_METADATA_TEXT_CHARS],
+                },
+            }
             for (doc_id, _, meta), emb in zip(batch, embeddings)
         ]
         index.upsert(vectors=vectors, namespace=_NAMESPACE)
