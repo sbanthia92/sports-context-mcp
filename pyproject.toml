@@ -32,6 +32,9 @@ dev = [
 where = ["."]
 include = ["tools*", "jobs*"]
 
+[tool.setuptools]
+py-modules = ["config"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
