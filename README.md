@@ -23,6 +23,8 @@ Both ingestion jobs that keep the data fresh are included:
 - [Configuration](#configuration)
 - [Registering with Claude Desktop](#registering-with-claude-desktop)
 - [Running the server standalone](#running-the-server-standalone)
+- [Verifying connectivity (--check)](#verifying-connectivity---check)
+- [Dry-run mode](#dry-run-mode)
 - [MCP tools reference](#mcp-tools-reference)
 - [Running ingestion jobs](#running-ingestion-jobs)
 - [Database schema](#database-schema)
@@ -142,6 +144,54 @@ python server.py
 ```
 
 The server communicates over stdio — it is designed to be launched by an MCP client, not run as a persistent HTTP service. Running it directly is mainly useful for smoke-testing startup and environment variable loading.
+
+---
+
+## Verifying connectivity (--check)
+
+Before registering the server with a client, verify that your environment variables are correct and all backends are reachable:
+
+```bash
+python server.py --check
+```
+
+Output example:
+
+```
+=== sports-context-mcp configuration check ===
+
+✅ Pinecone          connected (index: 'the-gaffer')
+✅ PostgreSQL (RO)   connected (localhost:5432/gaffer)
+✅ PostgreSQL (ETL)  connected (localhost:5432/gaffer)
+✅ Guardian API      registered key configured
+⚠️  API_SPORTS_KEY    not set (ingest_match_data will run FPL-only mode)
+
+✅ All required components OK
+```
+
+The command exits with code `0` if all required components pass, or `1` if any required component fails. Optional components (Guardian API, API-Sports) emit warnings but do not cause a non-zero exit.
+
+---
+
+## Dry-run mode
+
+Set `DRY_RUN=true` to fetch data and verify routing without writing anything to Pinecone or PostgreSQL:
+
+```bash
+DRY_RUN=true python server.py
+```
+
+```bash
+DRY_RUN=true python -c "from jobs.ingest_press_content import run; run()"
+```
+
+In dry-run mode:
+
+- **Tools** return a human-readable description of the call that *would* have been made — the SQL with host, or the Pinecone index/namespace/params — without opening any connection.
+- **Ingestion jobs** still call all external APIs (verifying connectivity) but skip every Pinecone and PostgreSQL write. Log output shows how many documents would have been upserted.
+- The server logs a `DRY RUN MODE` warning at startup so it is obvious from the logs.
+
+Accepted values for `DRY_RUN`: `true`, `1`, `yes` (case-insensitive). Any other value (or absent) disables dry-run.
 
 ---
 
@@ -268,7 +318,7 @@ player_xpts      materialized view: player_fpl_id, web_name, team_name,
 # Install dev dependencies if you haven't already
 pip install -e ".[dev]"
 
-# Run the full suite (66 tests, all mocked — no real DB or API calls)
+# Run the full suite (81 tests, all mocked — no real DB or API calls)
 pytest tests/ -v
 
 # Lint and format
@@ -279,11 +329,11 @@ The test suite covers:
 
 | File | What's tested |
 |---|---|
-| `tests/test_config.py` | Env var reading, defaults, dotenv loading |
-| `tests/test_tools_stats.py` | Mutation guard, row formatter, async DB path |
-| `tests/test_tools_press.py` | Pinecone query, recency re-ranking, degradation |
-| `tests/test_ingest_press_content.py` | BBC/Guardian fetchers, deduplication, orchestration |
-| `tests/test_ingest_match_data.py` | Delta filtering, thread coordination, rollback |
+| `tests/test_config.py` | Env var reading, defaults, dotenv loading, dry-run flag |
+| `tests/test_tools_stats.py` | Mutation guard, row formatter, async DB path, dry-run |
+| `tests/test_tools_press.py` | Pinecone query, recency re-ranking, degradation, dry-run |
+| `tests/test_ingest_press_content.py` | BBC/Guardian fetchers, deduplication, orchestration, dry-run |
+| `tests/test_ingest_match_data.py` | Delta filtering, thread coordination, rollback, dry-run |
 
 ---
 
