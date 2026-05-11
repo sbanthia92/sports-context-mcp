@@ -78,6 +78,17 @@ class _Config:
         """
         return os.getenv("GUARDIAN_API_KEY", "test")
 
+    @property
+    def dry_run(self) -> bool:
+        """
+        When True, tools return what they *would* do without any side effects, and
+        ingestion jobs fetch data but skip all writes to Pinecone and PostgreSQL.
+
+        Set DRY_RUN=true (or 1 / yes) to enable. Useful for verifying connectivity
+        and configuration before committing to a production run.
+        """
+        return os.getenv("DRY_RUN", "").lower() in ("1", "true", "yes")
+
 
 # Module-level singleton — import this everywhere.
 cfg = _Config()
