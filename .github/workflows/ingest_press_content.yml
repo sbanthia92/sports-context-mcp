@@ -31,7 +31,6 @@ jobs:
         # Install sports-context-mcp as an editable package so all relative
         # imports resolve correctly when running jobs as modules.
         run: pip install -e ".[dev]"
-        working-directory: sports-context-mcp
 
       - name: Run press content ingestion
         env:
@@ -42,4 +41,3 @@ jobs:
           # production key that unlocks full article body text.
           GUARDIAN_API_KEY: ${{ secrets.GUARDIAN_API_KEY }}
         run: python -m jobs.ingest_press_content
-        working-directory: sports-context-mcp
