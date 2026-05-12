@@ -1,6 +1,6 @@
 [project]
 name = "sports-context-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standalone MCP server exposing sports stats and press-conference RAG as MCP tools, with threaded ingestion jobs for PostgreSQL and Pinecone."
 requires-python = ">=3.11"
 dependencies = [

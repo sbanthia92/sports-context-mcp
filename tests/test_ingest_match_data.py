@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from jobs.ingest_match_data import (
-    _current_season_start_year,
     _get_last_kickoff,
     _parse_dt,
     _upsert_new_fixtures,
@@ -35,23 +34,6 @@ def test_parse_dt_none():
     """_parse_dt returns None for empty string."""
     assert _parse_dt("") is None
     assert _parse_dt(None) is None
-
-
-def test_current_season_start_year_during_season():
-    """During the PL season (e.g. May), returns the previous calendar year."""
-    # May 2026 → season started August 2025 → start year = 2025
-    with patch("jobs.ingest_match_data.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 5, 10, tzinfo=UTC)
-        year = _current_season_start_year()
-    assert year == 2025
-
-
-def test_current_season_start_year_in_august():
-    """In August, the new season has just started — return current year."""
-    with patch("jobs.ingest_match_data.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime(2026, 8, 15, tzinfo=UTC)
-        year = _current_season_start_year()
-    assert year == 2026
 
 
 # ---------------------------------------------------------------------------
@@ -190,13 +172,13 @@ def _make_fpl_result() -> dict:
 def test_delta_write_aborts_if_fpl_result_is_none():
     """delta_write logs and returns without touching the DB when FPL fetch failed."""
     with patch("jobs.ingest_match_data._get_db_conn") as mock_conn:
-        delta_write(fpl_result=None, sports_result=None)
+        delta_write(fpl_result=None)
 
     mock_conn.assert_not_called()
 
 
-def test_delta_write_proceeds_without_sports_result():
-    """delta_write works normally when API-Sports fetch failed (sports_result=None)."""
+def test_delta_write_commits_on_success():
+    """delta_write commits when the FPL fetch succeeded."""
     fpl_result = _make_fpl_result()
 
     ro_conn = MagicMock()
@@ -213,7 +195,7 @@ def test_delta_write_proceeds_without_sports_result():
     ro_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     with patch("jobs.ingest_match_data._get_db_conn", side_effect=[ro_conn, etl_conn]):
-        delta_write(fpl_result=fpl_result, sports_result=None)
+        delta_write(fpl_result=fpl_result)
 
     # Should commit without error
     etl_conn.commit.assert_called_once()
@@ -237,7 +219,7 @@ def test_delta_write_rolls_back_on_error():
     ro_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     with patch("jobs.ingest_match_data._get_db_conn", side_effect=[ro_conn, etl_conn]):
-        delta_write(fpl_result=fpl_result, sports_result=None)
+        delta_write(fpl_result=fpl_result)
 
     etl_conn.rollback.assert_called_once()
     etl_conn.commit.assert_not_called()
@@ -248,52 +230,42 @@ def test_delta_write_rolls_back_on_error():
 # ---------------------------------------------------------------------------
 
 
-def test_run_waits_for_both_fetch_threads_before_write():
-    """Thread 3 (delta_write) is submitted only after wait([f1, f2]) returns."""
+def test_run_waits_for_fetch_before_write():
+    """Thread 3 (delta_write) is submitted only after wait([f1]) returns."""
     call_order = []
 
     def fake_fetch_fpl():
         call_order.append("fpl")
         return _make_fpl_result()
 
-    def fake_fetch_sports():
-        call_order.append("sports")
-        return {"standings": [], "season": 2025}
-
-    def fake_delta_write(fpl_result, sports_result):
+    def fake_delta_write(fpl_result):
         call_order.append("write")
 
     with (
         patch("jobs.ingest_match_data.fetch_fpl_data", side_effect=fake_fetch_fpl),
-        patch("jobs.ingest_match_data.fetch_api_sports_data", side_effect=fake_fetch_sports),
         patch("jobs.ingest_match_data.delta_write", side_effect=fake_delta_write),
     ):
         run()
 
-    # Both fetch threads must complete before write is called
+    # Fetch thread must complete before write is called
     assert "write" in call_order
     assert call_order.index("write") > call_order.index("fpl")
-    assert call_order.index("write") > call_order.index("sports")
 
 
 def test_run_passes_none_to_write_on_fetch_failure():
-    """If a fetch thread raises, delta_write receives None for that result."""
+    """If the fetch thread raises, delta_write receives None."""
     received: dict = {}
 
-    def fake_delta_write(fpl_result, sports_result):
+    def fake_delta_write(fpl_result):
         received["fpl"] = fpl_result
-        received["sports"] = sports_result
 
-    _sports_rv = {"standings": [], "season": 2025}
     with (
         patch("jobs.ingest_match_data.fetch_fpl_data", side_effect=RuntimeError("FPL down")),
-        patch("jobs.ingest_match_data.fetch_api_sports_data", return_value=_sports_rv),
         patch("jobs.ingest_match_data.delta_write", side_effect=fake_delta_write),
     ):
         run()
 
     assert received["fpl"] is None
-    assert received["sports"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -302,11 +274,9 @@ def test_run_passes_none_to_write_on_fetch_failure():
 
 
 def test_run_dry_run_skips_delta_write():
-    """run(dry_run=True) fetches from both sources but never calls delta_write."""
-    _sports_rv = {"standings": [], "season": 2025}
+    """run(dry_run=True) fetches FPL data but never calls delta_write."""
     with (
         patch("jobs.ingest_match_data.fetch_fpl_data", return_value=_make_fpl_result()),
-        patch("jobs.ingest_match_data.fetch_api_sports_data", return_value=_sports_rv),
         patch("jobs.ingest_match_data.delta_write") as mock_write,
     ):
         run(dry_run=True)
@@ -315,16 +285,11 @@ def test_run_dry_run_skips_delta_write():
 
 
 def test_run_dry_run_still_fetches():
-    """run(dry_run=True) still calls both fetch functions to verify API reachability."""
-    _sports_rv = {"standings": [], "season": 2025}
+    """run(dry_run=True) still calls fetch_fpl_data to verify API reachability."""
     with (
         patch("jobs.ingest_match_data.fetch_fpl_data", return_value=_make_fpl_result()) as mock_fpl,
-        patch(
-            "jobs.ingest_match_data.fetch_api_sports_data", return_value=_sports_rv
-        ) as mock_sports,  # noqa: E501
         patch("jobs.ingest_match_data.delta_write"),
     ):
         run(dry_run=True)
 
     mock_fpl.assert_called_once()
-    mock_sports.assert_called_once()

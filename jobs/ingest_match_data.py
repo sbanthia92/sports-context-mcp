@@ -1,21 +1,18 @@
 """
 Ingestion job: match and player data → PostgreSQL.
 
-Fetches Premier League match and player data from two live sources concurrently,
-then performs a delta write to PostgreSQL using only the data that has arrived
-since the last recorded entry. Thread coordination is enforced via
-concurrent.futures.wait() so Thread 3 (the writer) never starts until both fetch
-threads have finished.
+Fetches Premier League match and player data from the FPL API, then performs a
+delta write to PostgreSQL using only the data that has arrived since the last
+recorded entry. Thread coordination is enforced via concurrent.futures.wait()
+so Thread 3 (the writer) never starts until the fetch thread has finished.
 
 Threads:
   Thread 1 — FPL API: bootstrap-static (players, teams, gameweeks) + /fixtures/
-  Thread 2 — API-Sports: current-season PL standings (supplementary context)
   Thread 3 — Delta write: find last kickoff_time in PostgreSQL, upsert only
              newer fixtures and their player stats to the existing schema
 
-Thread 3 starts only after Threads 1 and 2 complete. If a fetch thread fails,
-its result is treated as None and the delta write proceeds with whatever data
-is available — partial failure never aborts the entire job.
+Thread 3 starts only after Thread 1 completes. If the fetch thread fails, its
+result is treated as None and the delta write is skipped.
 
 PostgreSQL schema (read from db.py docstring and etl_v2.py):
   seasons, teams, gameweeks, players, fixtures, gw_player_stats
@@ -29,7 +26,7 @@ Cron: see .github/workflows/ingest_match_data.yml for schedule.
 import logging
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import psycopg2
@@ -45,8 +42,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 _FPL_BASE = "https://fantasy.premierleague.com/api"
-_SPORTS_BASE = "https://v3.football.api-sports.io"
-_PL_LEAGUE_ID = 39  # API-Sports Premier League ID
 _POSITION_MAP = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
 
 # psycopg2 connection options
@@ -76,34 +71,6 @@ def _fpl_get(path: str, timeout: int = 30) -> dict:
         f"{_FPL_BASE}{path}",
         timeout=timeout,
         headers={"User-Agent": "sports-context-mcp/0.1"},
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _sports_get(path: str, params: dict | None = None, timeout: int = 30) -> dict:
-    """
-    Perform a synchronous GET request to the API-Sports football API.
-
-    Args:
-        path:    Path relative to the API-Sports base URL (e.g. '/standings').
-        params:  Optional query parameters.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        Parsed JSON response as a dict.
-
-    Raises:
-        requests.HTTPError: On non-2xx responses.
-    """
-    resp = requests.get(
-        f"{_SPORTS_BASE}{path}",
-        params=params or {},
-        headers={
-            "x-apisports-key": cfg.api_sports_key,
-            "User-Agent": "sports-context-mcp/0.1",
-        },
-        timeout=timeout,
     )
     resp.raise_for_status()
     return resp.json()
@@ -143,65 +110,6 @@ def fetch_fpl_data() -> dict[str, Any]:
         len(fixtures),
     )
     return {"bootstrap": bootstrap, "fixtures": fixtures}
-
-
-# ---------------------------------------------------------------------------
-# Thread 2: API-Sports supplementary data fetch
-# ---------------------------------------------------------------------------
-
-
-def fetch_api_sports_data() -> dict[str, Any]:
-    """
-    Fetch supplementary Premier League data from API-Sports.
-
-    Retrieves current-season PL standings, which give team form, goal difference,
-    and league position — data that the FPL API does not expose. The current
-    season start year is inferred from today's date (July = season transition).
-
-    Returns:
-        Dict with keys:
-          'standings' — list of standing objects from API-Sports /standings response
-          'season'    — integer start year of the current season (e.g. 2025)
-
-    Raises:
-        Exception: Any network, HTTP, or missing-key error is propagated to the caller.
-    """
-    if not cfg.api_sports_key:
-        # Degrade gracefully if the key isn't configured rather than crashing the job.
-        log.warning("[Thread-Sports] API_SPORTS_KEY not set — skipping supplementary fetch.")
-        return {"standings": [], "season": _current_season_start_year()}
-
-    season = _current_season_start_year()
-    log.info("[Thread-Sports] fetching PL standings for season %d...", season)
-
-    data = _sports_get("/standings", {"league": _PL_LEAGUE_ID, "season": season})
-    standings_wrapper = data.get("response", [])
-
-    # API-Sports nests standings: response[0].league.standings[0] is the table.
-    standings: list[dict] = []
-    if standings_wrapper:
-        league_data = standings_wrapper[0].get("league", {})
-        all_standings = league_data.get("standings", [[]])
-        if all_standings:
-            standings = all_standings[0]  # first group = the main PL table
-
-    log.info("[Thread-Sports] done — %d teams in standings.", len(standings))
-    return {"standings": standings, "season": season}
-
-
-def _current_season_start_year() -> int:
-    """
-    Determine the start year of the current PL season from today's date.
-
-    The PL season starts in August, so:
-      - Jan–Jul → the season that started the previous year (e.g. Jan 2026 → 2025)
-      - Aug–Dec → the season starting this year (e.g. Aug 2025 → 2025)
-
-    Returns:
-        Integer start year (e.g. 2025 for the 2025/26 season).
-    """
-    now = datetime.now(UTC)
-    return now.year if now.month >= 8 else now.year - 1
 
 
 # ---------------------------------------------------------------------------
@@ -700,14 +608,12 @@ def _fetch_and_upsert_player_stats(
     return total_rows
 
 
-def delta_write(fpl_result: dict | None, sports_result: dict | None) -> None:
+def delta_write(fpl_result: dict | None) -> None:
     """
     Thread 3: write fetched data to PostgreSQL, only what's new since last run.
 
-    Must not be called until Threads 1 and 2 have both finished (enforced by the
-    orchestrator using concurrent.futures.wait). Operates on whichever of the two
-    fetch results is available — partial failure in a fetch thread does not prevent
-    writing the data that was successfully retrieved.
+    Must not be called until Thread 1 has finished (enforced by the orchestrator
+    using concurrent.futures.wait).
 
     Execution steps:
       1. Open a read-only connection to determine the delta boundary (last kickoff).
@@ -715,14 +621,10 @@ def delta_write(fpl_result: dict | None, sports_result: dict | None) -> None:
       3. Upsert season, teams, players, and gameweeks from FPL bootstrap.
       4. Upsert only fixtures newer than the delta boundary.
       5. For finished new fixtures, fetch and upsert per-player GW stats.
-      6. Log supplementary standings data from API-Sports (no write needed —
-         the existing schema does not have a standings table; this data is available
-         via the Pinecone RAG or via API-Sports queries at serve time).
-      7. Commit everything atomically.
+      6. Commit everything atomically.
 
     Args:
-        fpl_result:    Return value of fetch_fpl_data(), or None if that thread failed.
-        sports_result: Return value of fetch_api_sports_data(), or None if that thread failed.
+        fpl_result: Return value of fetch_fpl_data(), or None if that thread failed.
     """
     if fpl_result is None:
         log.error("[Thread-Write] FPL fetch failed — no data to write. Aborting delta write.")
@@ -770,14 +672,7 @@ def delta_write(fpl_result: dict | None, sports_result: dict | None) -> None:
             if new_fixtures:
                 _fetch_and_upsert_player_stats(cur, season_id, new_fixtures)
 
-        # Step 6: log API-Sports standings if available (informational only).
-        if sports_result:
-            standings = sports_result.get("standings", [])
-            if standings:
-                top3 = ", ".join(f"{s['rank']}. {s['team']['name']}" for s in standings[:3])
-                log.info("[Thread-Write] API-Sports top 3: %s", top3)
-
-        # Step 7: commit atomically — all-or-nothing.
+        # Step 6: commit atomically — all-or-nothing.
         etl_conn.commit()
         log.info("[Thread-Write] delta write committed successfully.")
 
@@ -802,35 +697,33 @@ def run(dry_run: bool = False) -> None:
     Run the full match data ingestion pipeline.
 
     Execution order:
-      1. Submit Thread 1 (FPL fetch) and Thread 2 (API-Sports fetch) concurrently.
-      2. Block with concurrent.futures.wait() until BOTH fetch threads complete.
-      3. Collect results, logging full tracebacks for any thread that raised.
-      4. Submit Thread 3 (delta write) with the combined results.
+      1. Submit Thread 1 (FPL fetch).
+      2. Block with concurrent.futures.wait() until the fetch thread completes.
+      3. Collect the result, logging full traceback if it raised.
+      4. Submit Thread 3 (delta write) with the result.
       5. Wait for Thread 3 to finish.
 
-    Thread 3 is guaranteed not to start until Threads 1 and 2 are both done.
-    Partial fetch failure (one thread raises) does not abort the job — delta_write
-    handles None results gracefully.
+    Thread 3 is guaranteed not to start until Thread 1 is done.
 
     Args:
-        dry_run: When True, fetch threads run normally but the delta write (Thread 3)
-                 is skipped. Logs the fixture and player counts that would have been
-                 written so you can verify API reachability and data shape before
-                 committing to a live run. Can also be enabled via DRY_RUN=true.
+        dry_run: When True, the fetch thread runs normally but the delta write
+                 (Thread 3) is skipped. Logs the fixture and player counts that
+                 would have been written so you can verify API reachability and
+                 data shape before committing to a live run. Can also be enabled
+                 via DRY_RUN=true.
     """
     log.info("=== ingest_match_data: starting%s ===", " [DRY RUN]" if dry_run else "")
 
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="ingest-match") as executor:
-        # Submit fetch threads.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest-match") as executor:
+        # Submit fetch thread.
         f1: Future = executor.submit(fetch_fpl_data)
-        f2: Future = executor.submit(fetch_api_sports_data)
 
-        # Block until BOTH fetch threads finish (success or failure).
-        log.info("Waiting for fetch threads (FPL + API-Sports) to complete...")
-        wait([f1, f2])  # concurrent.futures.wait — returns only when all are done
-        log.info("Both fetch threads finished.")
+        # Block until the fetch thread finishes (success or failure).
+        log.info("Waiting for FPL fetch thread to complete...")
+        wait([f1])  # concurrent.futures.wait — returns only when all are done
+        log.info("FPL fetch thread finished.")
 
-        # Collect results, logging full tracebacks for failures.
+        # Collect result, logging full traceback on failure.
         fpl_result: dict | None = None
         if f1.exception():
             exc1 = f1.exception()
@@ -838,14 +731,6 @@ def run(dry_run: bool = False) -> None:
             log.error("Thread-FPL raised an exception:\n%s", tb1)
         else:
             fpl_result = f1.result()
-
-        sports_result: dict | None = None
-        if f2.exception():
-            exc2 = f2.exception()
-            tb2 = "".join(traceback.format_exception(type(exc2), exc2, exc2.__traceback__))
-            log.error("Thread-Sports raised an exception:\n%s", tb2)
-        else:
-            sports_result = f2.result()
 
         if dry_run:
             players = len((fpl_result or {}).get("bootstrap", {}).get("elements", []))
@@ -859,8 +744,8 @@ def run(dry_run: bool = False) -> None:
             log.info("=== ingest_match_data: complete [DRY RUN] ===")
             return
 
-        # Submit Thread 3 now that Threads 1 and 2 are guaranteed to be done.
-        f3: Future = executor.submit(delta_write, fpl_result, sports_result)
+        # Submit Thread 3 now that Thread 1 is guaranteed to be done.
+        f3: Future = executor.submit(delta_write, fpl_result)
         f3.result()  # Wait for the write thread; re-raises on unhandled exception.
 
     log.info("=== ingest_match_data: complete ===")

@@ -12,7 +12,7 @@ Both ingestion jobs that keep the data fresh are included:
 | Job | What it does |
 |---|---|
 | `ingest_press_content` | Fetches articles from BBC Sport RSS and The Guardian API, embeds them, and upserts into Pinecone |
-| `ingest_match_data` | Fetches fixture and player-stat data from the FPL API + API-Sports, and delta-writes to PostgreSQL |
+| `ingest_match_data` | Fetches fixture and player-stat data from the FPL API, and delta-writes to PostgreSQL |
 
 ---
 
@@ -91,9 +91,6 @@ PINECONE_INDEX_NAME=the-gaffer   # optional, defaults to 'the-gaffer'
 # Register free at https://open-platform.theguardian.com/access/
 # Defaults to 'test' (public key — lower rate limit, no full article body)
 GUARDIAN_API_KEY=your-key-here
-
-# API-Sports key — required only for ingest_match_data
-API_SPORTS_KEY=your-key-here
 ```
 
 ### Which variables does each component need?
@@ -103,7 +100,7 @@ API_SPORTS_KEY=your-key-here
 | `query_historical_stats` tool | `DATABASE_URL` |
 | `query_press_conferences` tool | `PINECONE_API_KEY` |
 | `ingest_press_content` job | `PINECONE_API_KEY`, `GUARDIAN_API_KEY` |
-| `ingest_match_data` job | `DATABASE_ETL_URL` (or `DATABASE_URL`), `API_SPORTS_KEY` |
+| `ingest_match_data` job | `DATABASE_ETL_URL` (or `DATABASE_URL`) |
 
 ---
 
@@ -164,12 +161,11 @@ Output example:
 ✅ PostgreSQL (RO)   connected (localhost:5432/gaffer)
 ✅ PostgreSQL (ETL)  connected (localhost:5432/gaffer)
 ✅ Guardian API      registered key configured
-⚠️  API_SPORTS_KEY    not set (ingest_match_data will run FPL-only mode)
 
 ✅ All required components OK
 ```
 
-The command exits with code `0` if all required components pass, or `1` if any required component fails. Optional components (Guardian API, API-Sports) emit warnings but do not cause a non-zero exit.
+The command exits with code `0` if all required components pass, or `1` if any required component fails. Optional components (Guardian API) emit warnings but do not cause a non-zero exit.
 
 ---
 
@@ -267,13 +263,13 @@ Run twice daily for fresh injury and team news. Both fetchers run concurrently; 
 
 ### Match data (PostgreSQL)
 
-Fetches fixture and player-stat data from the FPL bootstrap API and API-Sports, then delta-writes to PostgreSQL — only rows with a `kickoff_time` newer than the latest stored fixture are inserted.
+Fetches fixture and player-stat data from the FPL bootstrap API, then delta-writes to PostgreSQL — only rows with a `kickoff_time` newer than the latest stored fixture are inserted.
 
 ```bash
 python -c "from jobs.ingest_match_data import run; run()"
 ```
 
-Runs two fetch threads concurrently (FPL API and API-Sports), waits for both to complete, then writes in a single transaction. If either fetch fails its result is passed as `None` and the writer continues with whatever data is available.
+Runs the FPL fetch in a worker thread, waits for it to complete, then writes in a single transaction. If the fetch fails, the delta write is skipped.
 
 ---
 

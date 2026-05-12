@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-11
+
+### Removed
+
+- **API-Sports dependency from `jobs/ingest_match_data.py`** — the supplementary
+  PL standings fetch (Thread 2) has been deleted along with the `_sports_get`
+  helper, `_SPORTS_BASE` / `_PL_LEAGUE_ID` constants, and the
+  `_current_season_start_year` helper. The job now runs a single FPL fetch
+  thread plus the delta writer. The Gaffer app no longer consumes API-Sports
+  data, so the dependency is no longer needed.
+
+- **`api_sports_key` from `config.py`** and the matching `API_SPORTS_KEY` env
+  var from `.github/workflows/ingest_match_data.yml`, `tests/conftest.py`, the
+  `server.py --check` output, and the docs.
+
+## [0.1.0]
+
 ### Added
 
 - **Package scaffolding** — `sports-context-mcp` structured as a standalone,

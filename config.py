@@ -65,11 +65,6 @@ class _Config:
         return os.getenv("DATABASE_ETL_URL", "") or self.database_url
 
     @property
-    def api_sports_key(self) -> str:
-        """API-Sports key. Used by ingest_match_data for supplementary match data."""
-        return os.getenv("API_SPORTS_KEY", "")
-
-    @property
     def guardian_api_key(self) -> str:
         """
         The Guardian open platform API key.

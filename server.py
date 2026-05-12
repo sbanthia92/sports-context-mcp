@@ -112,12 +112,6 @@ def check_config() -> None:
     else:
         lines.append("✅ Guardian API      registered key configured")
 
-    # --- API-Sports (optional) ---
-    if not cfg.api_sports_key:
-        lines.append("⚠️  API_SPORTS_KEY    not set (ingest_match_data will run FPL-only mode)")
-    else:
-        lines.append("✅ API-Sports        key configured")
-
     # --- Dry-run flag ---
     if cfg.dry_run:
         lines.append("\n🔁 DRY_RUN=true — no writes will be made")

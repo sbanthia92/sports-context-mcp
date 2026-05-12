@@ -25,7 +25,7 @@ sports-context-mcp/
     query_press_conferences.py     # MCP tool: semantic search → Pinecone 'press' namespace
   jobs/
     ingest_press_content.py        # Pinecone updater: BBC RSS + Guardian API, threaded
-    ingest_match_data.py           # PostgreSQL updater: FPL + API-Sports, delta write
+    ingest_match_data.py           # PostgreSQL updater: FPL, delta write
   tests/
     conftest.py
     test_config.py
@@ -70,7 +70,6 @@ loaded automatically by `config.py` when `python-dotenv` is installed.
 | `PINECONE_INDEX_NAME` | No     | `the-gaffer` | Pinecone index name |
 | `DATABASE_URL`      | Yes*     | —            | Read-only PostgreSQL DSN (`gaffer_readonly` user) |
 | `DATABASE_ETL_URL`  | Yes*     | —            | Read/write PostgreSQL DSN (`gaffer_etl` user). Falls back to `DATABASE_URL`. |
-| `API_SPORTS_KEY`    | No       | —            | API-Sports key for supplementary match data |
 | `GUARDIAN_API_KEY`  | No       | `test`       | Guardian open platform key. Register at open-platform.theguardian.com for full body text. |
 
 *Required for the respective tool/job to function; the package will start without them
@@ -118,13 +117,12 @@ No other changes needed.
 
 ### `ingest_match_data`
 - Thread 1: FPL API bootstrap-static + fixtures
-- Thread 2: API-Sports PL standings (supplementary)
-- `concurrent.futures.wait([f1, f2])` ensures Thread 3 never starts until both fetch threads complete
+- `concurrent.futures.wait([f1])` ensures Thread 3 never starts until the fetch thread completes
 - Thread 3 (delta write): finds `MAX(kickoff_time)` in PostgreSQL, upserts only newer fixtures
   and their `gw_player_stats` rows. Commits atomically; rolls back on any write error.
 
-**Partial failure**: if a fetch thread fails, its result is `None`. The delta writer
-logs the full traceback and continues with whatever data is available.
+**Fetch failure**: if the fetch thread fails, its result is `None` and the delta
+writer logs the full traceback and aborts the write step.
 
 ## Pinecone document schema
 
@@ -163,8 +161,8 @@ Documents upserted to the `press` namespace carry this metadata:
   Register for a free production key to get full article text.
 - **Pinecone inference rate limits**: the 8-second sleep between embed batches in `_upsert`
   exists to avoid HTTP 429s on the free inference tier. Remove or reduce it on paid tiers.
-- **Thread 3 ordering**: `concurrent.futures.wait([f1, f2])` is the only enforcement that
-  Thread 3 starts after Threads 1 and 2. Do not refactor this to `as_completed` — it would
-  allow the writer to start before both fetchers finish.
+- **Thread 3 ordering**: `concurrent.futures.wait([f1])` is the only enforcement that
+  Thread 3 starts after Thread 1 (the FPL fetch). Do not refactor this to `as_completed`
+  in a way that allows the writer to start before the fetcher finishes.
 - **psycopg2 vs asyncpg**: jobs use `psycopg2` (sync), MCP tools use `asyncpg` (async).
   Do not swap them — jobs must stay sync to avoid mixing asyncio and threading.
