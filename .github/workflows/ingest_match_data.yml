@@ -1,7 +1,7 @@
 name: Ingest Match Data
 
-# Fetches the latest PL match and player data from the FPL API and API-Sports
-# and writes any new entries to PostgreSQL (delta update — only new fixtures).
+# Fetches the latest PL match and player data from the FPL API and writes any
+# new entries to PostgreSQL (delta update — only new fixtures).
 #
 # --- HOW TO ADJUST THE SCHEDULE ---
 #
@@ -56,6 +56,4 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           # Read/write connection used to write new fixtures and player stats.
           DATABASE_ETL_URL: ${{ secrets.DATABASE_ETL_URL }}
-          # API-Sports key for supplementary match data (standings, etc.).
-          API_SPORTS_KEY: ${{ secrets.API_SPORTS_KEY }}
         run: python -m jobs.ingest_match_data
