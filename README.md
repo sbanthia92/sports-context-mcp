@@ -47,7 +47,13 @@ The PostgreSQL database and Pinecone index are part of [The Gaffer](https://gith
 
 ## Installation
 
-### With uv (recommended)
+### From PyPI (recommended)
+
+```bash
+pip install sports-context-mcp
+```
+
+### With uv
 
 ```bash
 git clone https://github.com/sbanthia92/sports-context-mcp
@@ -55,7 +61,7 @@ cd sports-context-mcp
 uv sync
 ```
 
-### With pip
+### With pip (from source)
 
 ```bash
 git clone https://github.com/sbanthia92/sports-context-mcp
@@ -106,7 +112,25 @@ GUARDIAN_API_KEY=your-key-here
 
 ## Registering with Claude Desktop
 
-Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows).
+
+### If installed from PyPI (recommended)
+
+```json
+{
+  "mcpServers": {
+    "sports-context": {
+      "command": "sports-context-mcp",
+      "env": {
+        "DATABASE_URL": "postgresql://gaffer_readonly:password@localhost:5432/gaffer",
+        "PINECONE_API_KEY": "pcsk_..."
+      }
+    }
+  }
+}
+```
+
+### If running from source
 
 ```json
 {
@@ -136,7 +160,10 @@ Restart Claude Desktop. You should see `sports-context` appear in the tools pane
 ## Running the server standalone
 
 ```bash
-cd sports-context-mcp
+# If installed from PyPI
+sports-context-mcp
+
+# If running from source
 python server.py
 ```
 
@@ -149,6 +176,10 @@ The server communicates over stdio — it is designed to be launched by an MCP c
 Before registering the server with a client, verify that your environment variables are correct and all backends are reachable:
 
 ```bash
+# If installed from PyPI
+sports-context-mcp --check
+
+# If running from source
 python server.py --check
 ```
 
@@ -174,7 +205,7 @@ The command exits with code `0` if all required components pass, or `1` if any r
 Set `DRY_RUN=true` to fetch data and verify routing without writing anything to Pinecone or PostgreSQL:
 
 ```bash
-DRY_RUN=true python server.py
+DRY_RUN=true sports-context-mcp
 ```
 
 ```bash
